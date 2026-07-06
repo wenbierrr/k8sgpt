@@ -1,12 +1,14 @@
 deployment:
   image:
     repository: ghcr.io/k8sgpt-ai/k8sgpt
-    tag: "" # defaults to Chart.appVersion if unspecified
+    tag: "latest" # defaults to Chart.appVersion if unspecified
   imagePullPolicy: Always
   annotations: {}
   env:
-    model: "gpt-3.5-turbo"
+    model: "openrouter/auto"
     backend: "openai" # one of: [ openai | llama ]
+    baseUrl: " https://openrouter.ai/api/v1" # optional: custom API base URL, e.g. https://openrouter.ai/api/v1 (sets K8SGPT_BASEURL)
+  
   # MCP (Model Context Protocol) server configuration
   mcp:
     enabled: false # Enable MCP server
