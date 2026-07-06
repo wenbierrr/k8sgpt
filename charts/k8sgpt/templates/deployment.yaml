@@ -48,12 +48,12 @@ spec:
           value: {{ .Values.deployment.env.model }}
         - name: K8SGPT_BACKEND
           value: {{ .Values.deployment.env.backend }}
-        {{- if .Values.secret.secretKey }}
+        {{- if .Values.secret.existingSecret }}
         - name: K8SGPT_PASSWORD
           valueFrom:
             secretKeyRef:
-              name: ai-backend-secret
-              key: secret-key
+              name: {{ .Values.secret.existingSecret }}
+              key: {{ .Values.secret.key | default "secret-key" }}
         {{- end }}
         - name: XDG_CONFIG_HOME
           value: /k8sgpt-config/
