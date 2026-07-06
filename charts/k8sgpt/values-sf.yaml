@@ -1,9 +1,10 @@
 deployment:
   image:
-    repository: ghcr.io/k8sgpt-ai/k8sgpt
-    tag: "latest" # defaults to Chart.appVersion if unspecified
+    repository: wenbin681/k8sgpt
+    tag: "v0.1" # defaults to Chart.appVersion if unspecified
   imagePullPolicy: Always
   annotations: {}
+  ## optional env var for k8sgpt itself to send output to LLM endpoint 
   env:
     model: "openrouter/auto"
     backend: "openai" # one of: [ openai | llama ]
@@ -11,7 +12,7 @@ deployment:
   
   # MCP (Model Context Protocol) server configuration
   mcp:
-    enabled: false # Enable MCP server
+    enabled: true  # Enable MCP server
     port: "8089" # Port for MCP server
     http: true # Enable HTTP mode for MCP server
   resources:
