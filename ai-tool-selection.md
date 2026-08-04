@@ -1,4 +1,4 @@
-# RFC: Selecting an AI Tool for Kubernetes/OpenShift Cluster Troubleshooting
+# RFC: Evaluating the need for an AI Tool for Kubernetes Troubleshooting
 
 
 ## Table of contents
@@ -12,24 +12,17 @@
    - [kagent — agentic platform](#kagent--agentic-platform)
    - [LibreChat (MCP client) + K8sGPT (MCP server)](#librechat-mcp-client--k8sgpt-mcp-server)
 5. [Comparison matrix](#comparison-matrix)
-6. [Kagent design](#kagent-design)
-   - [Proposed Workflow](#proposed-workflow--how-a-de-uses-it)
-   - [Architecture](#architecture-collector--diagnostician)
-   - [Success criteria](#success-criteria)
-   - [Key concerns & guardrails](#key-concerns--guardrails)
-   - [Limitations](#limitations)
-   - [Appendix A — rough work for kagent agent definitions](#appendix-a--rough-work-for-kagent-agent-definitions)
+6. [Testing LibreChat + K8sGPT on stg](#testing-librechat--k8sgpt-on-stg)
+7. [Rollout to DEs — a one-week pilot](#rollout-to-des--a-one-week-pilot)
+8. [Appendix](#appendix)
+   - [Kagent design](#kagent-design)
 
 
 ## Motivation
 
-When something breaks in the cluster, finding the real cause and a persistent fix can be time-consuming. Three problems make it worse:
+The focus is to help DEs with their day to day deployment. Specifically, when a deployment breaks in the cluster **AFTER it is deployed using argo**, finding the cause and fix can be time-consuming. The goal is to assist the DE with troubleshooting deployment issues, so as to save time.
 
-1. **Correlation** — working out what else is affected means hunting across the cluster by hand, which costs time.
-2. **Hotfixes over root causes** — under pressure, the DE may apply a hotfix without finding the real cause, so the problem recurs.
-3. **Inconsistent quality** — a failure one engineer solves in minutes can stall another for hours.
-
-The goal is a tool that addresses these three problems when troubleshooting cluster and deployment issues.
+This RFC moves in three steps: **evaluate** the different tools available ([options](#options-considered) → [comparison matrix](#comparison-matrix)), if there is a promising tool - **prove** it against known failures on stg ([testing](#testing-librechat--k8sgpt-on-stg)), then **measure** its value in DEs' hands ([one-week pilot](#rollout-to-des--a-one-week-pilot)), so as to produce the evidence to justify or reject the adoption of tool.
 
 ## Scope
 
@@ -171,28 +164,100 @@ Each decision driver, scored across all four options, split into **Information**
 
 
 
+With all the options weighed, the matrix leaves one candidate standing:
+
+- **K8sGPT alone** — no conversational follow-up
+- **kubectl-ai** — no GUI
+- **kagent** — day-1/day-2 overhead outweighs its autonomy
+- **LibreChat + K8sGPT** — scores well on every driver, no disqualifying gap
+
+But winning the comparison only makes it the best of four options, but it **does not prove it is worth productionising**. The rest of this RFC tests that claim in two stages: first against known failures on stg (below), then in the hands of the DEs themselves ([one-week pilot](#rollout-to-des--a-one-week-pilot)).
+
 ## Testing LibreChat + K8sGPT on stg
 
 To quantify the benefits, LibreChat + K8sGPT is tested against real failures on the staging cluster: each pod that is down is troubleshot conversationally through LibreChat, and the outcome is recorded below. The manually confirmed root cause serves as the answer key.
 
-| # | Pod (down) | Namespace | Root cause | Time taken | Accuracy (root cause correct?) | Precision (all claims grounded, no hallucination?) |
+| # | Pod (down) | Namespace | Root cause | Time taken | Root cause found by tool? - Y/N/Partial/Wrong | Any claim not grounded in cluster evidence? (Hallucination) - Y/N |
 |---|---|---|---|---|---|---|
-| 1 |starline-harmony-db-nsc-stg-1 | harmony-db | cannot create lock file because insufficient storage assigned | 10 mins | 1/1 | 1/1 |
-| 2 | crossbeam-mi-source-1 | crossbeam-mi | no network policy to allow traffic from source to broker | 20 mins | 1/1 | 1/1 |
+| 1 |starline-harmony-db-nsc-stg-1 | harmony-db | cannot create lock file because insufficient storage assigned | 10 mins | Y | N |
+| 2 | crossbeam-mi-source-1 | crossbeam-mi | no network policy to allow traffic from source to broker | 20 mins | Y | N |
 | 3 | media-processor-6f... | starlake-media-processor | kafka media processer cannot reach schema registry's service | | | |
 
-# Kagent design
+## Rollout to DEs — a one-week pilot
 
-## Table of contents
+The stg tests above are a handful of cases ran, with no past baseline to compare against. To gather further evidence on whether the tool is worth adopting, the pilot aims to gain better data points through the DEs: whenever the DE hits a deployment issue on stg, they debug it through LibreChat + K8sGPT, then fill a scorecard.
+
+```mermaid
+flowchart LR
+    subgraph D0["Day 0"]
+        T["Team agrees pass/fail<br/>thresholds + scorecard"]
+    end
+    subgraph W1["Pilot week — DE"]
+        A["Deployment issue on stg?<br/>Debug via LibreChat<br/>+  scorecard"]
+    end
+    G{"Compare against thresholds"}
+    T --> A
+    A --> G
+    G -->|pass| P["prd RFC:<br/>security, RBAC, rollout"]
+    G -->|fail| F["Failure analysis:<br/>fixable or fundamental?"]
+```
+
+
+### Day 0 — fix the bar
+
+**Thresholds** are agreed **before** any pilot data exists, so that there is a well-defined gate as to whether the tool will be brought into prod.
+
+| Metric | Pass bar |
+|---|---|
+| Root-cause accuracy (full or partial) | ≥ 70% |
+| Hallucinations? | 0 |
+| DE-estimated time saved per incident | median ≥ 30% |
+| DE verdict "this was useful" | ≥ 50% of issues |
+
+
+### The pilot week — the duty DE debugs through the tool
+
+For one week, whenever the duty DE of the day encounters a D2D deployment issue on stg, they debug it through LibreChat + K8sGPT first — instead of going straight to manual troubleshooting. One scorecard per issue to fill:
+
+| Field | Answer |
+|---|---|
+| Root cause found by tool? | full / partial / no / **wrong** |
+| Any claim not grounded in cluster evidence? (Hallucination) | Y/N (paste it) |
+| Time to root cause | minutes |
+| Roughly how long without the tool? | minutes (estimate) |
+| Without the tool, would this have been escalated? | Y/N |
+| Verdict was "tenant app bug, not platform"? | Y/N |
+
+Two notes on the fields:
+
+- **The "how long without the tool" estimate** replaces a measured manual baseline — measuring one would mean solving every incident twice, which DE workload does not allow. A self-estimate is weaker evidence and the RFC says so openly; the baseline log running underneath is what turns it into measured data over the following weeks.
+- **The last row counts as a resolution:** a large share of 1.2 work is proving *whose problem it is*, and an evidence-backed "this belongs to the app team" frees DE time just as surely as a fix.
+
+### End of week — go/no-go
+
+Score the pilot against the Day-0 thresholds.
+
+- **Pass** → proceed to the prd RFC (security, RBAC wiring, rollout — the follow-up already promised in [Scope](#scope)).
+- **Fail** → the scorecards say exactly which criterion failed, and whether the cause is fixable (prompt tuning, analyzer coverage) or fundamental to the tool.
+
+Either way the decision is evidence-backed — which is the entire point of the pilot.
+
+# Appendix
+
+## Kagent design
+
+> Preserved for reference: kagent was ruled out in the [comparison matrix](#comparison-matrix), but the design work below — the Collector/Diagnostician architecture, success criteria, and the common-failures test cases — remains relevant.
+
+### Table of contents
 
 - [Proposed Workflow](#proposed-workflow--how-a-de-uses-it)
 - [Architecture](#architecture-collector--diagnostician)
 - [Success criteria](#success-criteria)
 - [Key concerns & guardrails](#key-concerns--guardrails)
 - [Limitations](#limitations)
-- [Appendix A — rough work for kagent agent definitions](#appendix-a--rough-work-for-kagent-agent-definitions)
+- [Rough work for kagent agent definitions](#rough-work-for-kagent-agent-definitions)
 
-## Proposed Workflow — how a DE uses it
+### Proposed Workflow — how a DE uses it
 
 The DE reports a failing pod to the **Diagnostician** (the orchestrator). The Diagnostician calls the **Collector** — its evidence-gathering tool, and the only agent that touches the cluster — gathers what it needs, reasons over it, and returns a root cause + suggested fix with the evidence to verify. The DE re-enters only if the Diagnostician needs context that the cluster cannot provide, and at the end.
 
@@ -236,7 +301,7 @@ Either answer feeds back into the next correlation (step 6).
 
 A simple failure — e.g. a missing ConfigMap already visible in the first evidence bundle — needs neither, and the orchastrctor can decide to skip straight from step 6 to the report (step 13).
 
-## Architecture (Collector / Diagnostician)
+### Architecture (Collector / Diagnostician)
 
 - **Diagnostician (orchestrator)** = the agent the DE talks to. Reasons over evidence into a root cause and, from the root cause, a suggested fix. Holds no cluster tools; gathers only by calling the Collector.
 - **Collector (evidence tool)** = the only thing that touches the cluster: gathers evidence, determines blast radius, and answers the Diagnostician's requests. It reports what it *saw*, never what it *means*.
@@ -348,7 +413,7 @@ A short, plain-language report in five sections — no JSON:
 > - Secret `db-credentials` not found in `payments` — *`get secret`*
 > - Blast radius: 0/3 replicas available; downstream `orders` erroring — *Istio traffic graph*
 
-## Success criteria
+### Success criteria
 
 Four criteria define a good diagnosis. Every test case is scored on all four.
 
@@ -361,7 +426,7 @@ Four criteria define a good diagnosis. Every test case is scored on all four.
 
 **How scoring works:** Use past incidents that are already solved, so the correct answer is known. Feed the failing pod to the agent, read its answer, and score it against the above criterias.
 
-### The common failures (these become the test cases)
+#### The common failures (these become the test cases)
 
 `CrashLoopBackOff` is an umbrella over a handful of recurring causes. Each row below is a ready-made test case — a known failure, its usual root cause, the signal the Collector reads, and the known-good fix:
 
@@ -375,7 +440,7 @@ Four criteria define a good diagnosis. Every test case is scored on all four.
 | Unhandled application exception | A bug in the app code throws on startup | Stack trace in the previous-container logs; exit code `1` | Application code fix (out of cluster-config scope — the agent surfaces it, the app team fixes it) |
 
 
-### How the agent improves
+#### How the agent improves
 
 It is improved by editing its **system prompt, skills, or example incidents**, or by improving the **evidence the Collector gathers**. The loop is : run the test cases → read the ones it failed → work out why → make one change → re-run the same cases, and keep the change only if the score (of the above success criterias) went up
 
@@ -385,7 +450,7 @@ It is improved by editing its **system prompt, skills, or example incidents**, o
 >
 > make it right -> OTEL tracing to trace each agent's footprint, and [DeepEval](https://github.com/confident-ai/deepeval) are layered in later to automate scoring and unlock the full agentic metrics (tool correctness, step efficiency, plan adherence)
 
-## Key concerns & guardrails
+### Key concerns & guardrails
 
 - **Blast radius / vetting** — Only the Collector touches the cluster, and it runs read-only: its ServiceAccount has only read verbs (`get`, `list`, `watch`) bound to its Role — even if the LLM decided to mutate state, the Kube API would reject it
 
@@ -398,19 +463,19 @@ It is improved by editing its **system prompt, skills, or example incidents**, o
 
 - **Risk** — for a read-only diagnostic agent, the failure modes are *misleading suggestions*, not destructive actions
 
-- **Auditability** — not needed if it is a read only agent
+- **Auditability** — read-only removes destructive actions, not the need for a trail of *who ran what*. Covered: Postgres persists per-DE chat history; OTEL traces each agent's tool calls
 
 - **Portability** — Kagent runs on any conformant Kubernetes; not OpenShift-specific.
 
-## Limitations
+### Limitations
 
 - Kagent is **alpha (v0.x)** — APIs and behaviour may change
 - the value of the system is bounded by how accurate and calibrated the LLM's diagnosis is 
 
-## Appendix A — rough work for kagent agent definitions
+### Rough work for kagent agent definitions
 
 
-### A.1 Vocabulary: tool vs. skill vs. system message vs. workflow
+#### A.1 Vocabulary: tool vs. skill vs. system message vs. workflow
 
 These are four different things in kagent; they are easy to conflate.
 
@@ -422,7 +487,7 @@ These are four different things in kagent; they are easy to conflate.
 | **Workflow** | Not a single resource — the **multi-agent composition** where agents discover and invoke each other via A2A delegation. | the *wiring between agents* | The Collector ⇄ Diagnostician loop shown in [Proposed Workflow](#proposed-workflow--how-a-de-uses-it). |
 
 
-### A.2 Collector agent
+#### A.2 Collector agent
 
 ```yaml
 apiVersion: kagent.dev/v1alpha2
@@ -474,7 +539,7 @@ spec:
 ```
 
 
-### A.3 Diagnostician agent
+#### A.3 Diagnostician agent
 
 ```yaml
 apiVersion: kagent.dev/v1alpha2
